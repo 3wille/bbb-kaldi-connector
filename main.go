@@ -104,24 +104,29 @@ func sipCall() {
 		log.Fatal("send ack over websocket: ", err)
 	}
 
+	hangup(sipConnection)
+}
+
+func hangup(sipConnection *websocket.Conn) {
 	var bye sip.Msg
 	bye.Method = "BYE"
 	bye.CSeqMethod = "BYE"
 	bye.CSeq++
-	b.Reset()
+	var b bytes.Buffer
 	bye.Append(&b)
-	err = sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
+	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
-		log.Fatal("send ack over websocket: ", err)
+		log.Fatal("send BYE over websocket: ", err)
 	}
+	log.Println("send BYE over websocket")
 
 	// Wait for acknowledgment of hangup.
 	sipConnection.SetReadDeadline(time.Now().Add(time.Second * 2))
-	_, message, err = sipConnection.ReadMessage()
+	_, message, err := sipConnection.ReadMessage()
 	if err != nil {
 		log.Fatal(err)
 	}
-	msg, err = sip.ParseMsg(message)
+	msg, err := sip.ParseMsg(message)
 	if err != nil {
 		log.Fatal(err)
 	}
