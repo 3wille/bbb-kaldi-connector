@@ -87,24 +87,28 @@ func sipCall() {
 	}
 	log.Print(rrtpaddr)
 
+	ack200Ok(sipConnection, invite, msg)
+
+	hangup(sipConnection)
+}
+
+func ack200Ok(sipConnection *websocket.Conn, invite *sip.Msg, okMessage *sip.Msg) {
 	// Acknowledge the 200 OK to answer the call.
 	var ack sip.Msg
 	ack.Request = invite.Request
-	ack.From = msg.From
-	ack.To = msg.To
-	ack.CallID = msg.CallID
+	ack.From = okMessage.From
+	ack.To = okMessage.To
+	ack.CallID = okMessage.CallID
 	ack.Method = "ACK"
-	ack.CSeq = msg.CSeq
+	ack.CSeq = okMessage.CSeq
 	ack.CSeqMethod = "ACK"
-	ack.Via = msg.Via
+	ack.Via = okMessage.Via
 	var b bytes.Buffer
 	ack.Append(&b)
-	err = sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
+	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
 		log.Fatal("send ack over websocket: ", err)
 	}
-
-	hangup(sipConnection)
 }
 
 func hangup(sipConnection *websocket.Conn) {
