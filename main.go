@@ -63,6 +63,23 @@ func sipCall() {
 
 	waitFor100Trying(sipConnection)
 
+	msg := waitFor200Ok(sipConnection)
+
+	// Figure out where they want us to send RTP.
+	var rrtpaddr *net.UDPAddr
+	if ms, ok := msg.Payload.(*sdp.SDP); ok {
+		rrtpaddr = &net.UDPAddr{IP: net.ParseIP(ms.Addr), Port: int(ms.Audio.Port)}
+	} else {
+		log.Fatal("200 ok didn't have sdp payload")
+	}
+	log.Print(rrtpaddr)
+
+	ack200Ok(sipConnection, invite, msg)
+
+	hangup(sipConnection)
+}
+
+func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
 	// Receive 200 OK.
 	sipConnection.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, message, err := sipConnection.ReadMessage()
@@ -77,19 +94,7 @@ func sipCall() {
 	if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
 		log.Fatal("wanted 200 ok but got:", msg.Status, msg.Phrase)
 	}
-
-	// Figure out where they want us to send RTP.
-	var rrtpaddr *net.UDPAddr
-	if ms, ok := msg.Payload.(*sdp.SDP); ok {
-		rrtpaddr = &net.UDPAddr{IP: net.ParseIP(ms.Addr), Port: int(ms.Audio.Port)}
-	} else {
-		log.Fatal("200 ok didn't have sdp payload")
-	}
-	log.Print(rrtpaddr)
-
-	ack200Ok(sipConnection, invite, msg)
-
-	hangup(sipConnection)
+	return msg
 }
 
 func ack200Ok(sipConnection *websocket.Conn, invite *sip.Msg, okMessage *sip.Msg) {
