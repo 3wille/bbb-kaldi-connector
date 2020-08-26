@@ -6,8 +6,6 @@ import (
 	"log"
 	"net"
 	"net/url"
-	"os"
-	"os/signal"
 	"time"
 
 	"github.com/3wille/sip-go/wernerd-GoRTP/src/net/rtp"
@@ -16,6 +14,8 @@ import (
 	"github.com/jart/gosip/sip"
 	"github.com/jart/gosip/util"
 	"github.com/thanhpk/randstr"
+
+	"gopkg.in/hraban/opus.v2"
 )
 
 // log.Fatal(http.ListenAndServe(":8000", nil))
@@ -30,9 +30,8 @@ func main() {
 	if err != nil {
 		log.Fatal("sip dial: ", err)
 	}
-	connected := true
 	stopLocalRecv := make(chan bool)
-	defer hangup(sipConnection, connected, stopLocalRecv)
+	defer hangup(sipConnection, stopLocalRecv)
 
 	// done := make(chan struct{})
 	// go func() {
@@ -52,7 +51,7 @@ func main() {
 	// laddr := sipConnection.LocalAddr().(*net.UDPAddr)
 
 	// Create an RTP socket.
-	rtpsock, err := net.ListenPacket("udp4", "127.0.0.1:4000")
+	rtpsock, err := net.ListenPacket("udp4", "127.0.0.1:4002")
 	rtpAddr, _ := net.ResolveIPAddr("ip", "127.0.0.1")
 	if err != nil {
 		log.Fatal("rtp listen:", err)
@@ -82,7 +81,7 @@ func main() {
 
 	rsLocal, err := prepareRTPSession(rtpAddr, rtpUDPAddr)
 	if err != nil {
-		hangup(sipConnection, connected, stopLocalRecv)
+		hangup(sipConnection, stopLocalRecv)
 		log.Fatal("Couldn't create remote: ", err)
 	}
 	// go receivePacketLocal(rsLocal)
@@ -91,33 +90,45 @@ func main() {
 		dataReceiver := rsLocal.CreateDataReceiveChan()
 		cnt := 0
 
-		file, err := os.Create("test.pcmu")
+		dec, err := opus.NewDecoder(48000, 1)
 		if err != nil {
-			hangup(sipConnection, connected, stopLocalRecv)
-			log.Fatal()
+			hangup(sipConnection, stopLocalRecv)
+			log.Fatal("Couldn't open OPUS decoder")
 		}
-		defer file.Close()
 
 		// setup interrupt catcher
-		sigchan := make(chan os.Signal, 1)
-		signal.Notify(sigchan, os.Interrupt)
+		// sigchan := make(chan os.Signal, 1)
+		// signal.Notify(sigchan, os.Interrupt)
 		for {
 			select {
 			case rp := <-dataReceiver:
-				log.Println("Remote receiver got:", cnt, "packets")
+				// log.Println("Remote receiver got:", cnt, "packets")
 				// log.Println(rp.Payload())
-				log.Println(rp.PayloadType())
-				// log.Println(len(rp.Payload()))
-				file.Write(rp.Payload())
+				// log.Println(rp.Sequence())
+				// log.Println(rp.Timestamp())
+				// log.Println(rp.PayloadType())
+				log.Println("Len: ", len(rp.Payload()))
+				// file.Write(rp.Payload())
+				payload := rp.Payload()
+				var frameSizeMs float64 = 60 // if you don't know, go with 60 ms.
+				channels := 1.0
+				sampleRate := 16000.0
+				frameSize := channels * frameSizeMs * sampleRate / 1000
+				pcm := make([]int16, int(frameSize))
+				sampleCount, err := dec.Decode(payload, pcm)
+				if err != nil {
+					log.Println("Couldn't decode frame")
+				}
+				log.Println((sampleCount))
 				cnt++
 				rp.FreePacket()
-				file.Sync()
+				// file.Sync()
 			case <-stopLocalRecv:
 				log.Println("stop receiving")
 				return
-			case <-sigchan:
-				hangup(sipConnection, connected, stopLocalRecv)
-				os.Exit(1)
+				// case <-sigchan:
+				// 	hangup(sipConnection, connected, stopLocalRecv)
+				// 	os.Exit(1)
 			}
 		}
 	}()
@@ -135,9 +146,10 @@ func main() {
 	// rsLocal.WriteData(rp)
 	// rp.FreePacket()
 
-	time.Sleep(20 * time.Second)
+	time.Sleep(2 * time.Second)
 	log.Print("End")
-	hangup(sipConnection, connected, stopLocalRecv)
+	rsLocal.CloseSession()
+	hangup(sipConnection, stopLocalRecv)
 }
 
 func prepareRTPSession(rtpAddr *net.IPAddr, rtpUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
@@ -148,7 +160,7 @@ func prepareRTPSession(rtpAddr *net.IPAddr, rtpUDPAddr *net.UDPAddr) (rsLocal *r
 		log.Fatal("Couln't set up TransportUDP")
 	}
 
-	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 2, "OPUS"}
+	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 1, "OPUS"}
 	// TransportUDP implements TransportWrite and TransportRecv interfaces thus
 	// use it as write and read modules for the Session.
 	rsLocal = rtp.NewSession(tpLocal, tpLocal)
@@ -199,34 +211,33 @@ func ack200Ok(sipConnection *websocket.Conn, invite *sip.Msg, okMessage *sip.Msg
 	}
 }
 
-func hangup(sipConnection *websocket.Conn, connected bool, stopLocalRecv chan bool) {
+func hangup(sipConnection *websocket.Conn, stopLocalRecv chan bool) {
 	stopLocalRecv <- true
-	if connected {
-		var bye sip.Msg
-		bye.Method = "BYE"
-		bye.CSeqMethod = "BYE"
-		bye.CSeq++
-		var b bytes.Buffer
-		bye.Append(&b)
-		err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
-		if err != nil {
-			log.Fatal("send BYE over websocket: ", err)
-		}
-		log.Println("send BYE over websocket")
+	var bye sip.Msg
+	bye.Method = "BYE"
+	bye.CSeqMethod = "BYE"
+	bye.CSeq++
+	var b bytes.Buffer
+	bye.Append(&b)
+	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
+	if err != nil {
+		log.Fatal("send BYE over websocket: ", err)
+	}
+	log.Println("send BYE over websocket")
+	log.Println(b.String())
 
-		// Wait for acknowledgment of hangup.
-		sipConnection.SetReadDeadline(time.Now().Add(time.Second * 3))
-		_, message, err := sipConnection.ReadMessage()
-		if err != nil {
-			log.Fatal(err)
-		}
-		msg, err := sip.ParseMsg(message)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
-			log.Fatal("wanted bye response 200 ok but got:", msg.Status, msg.Phrase)
-		}
+	// Wait for acknowledgment of hangup.
+	sipConnection.SetReadDeadline(time.Now().Add(time.Second * 3))
+	_, message, err := sipConnection.ReadMessage()
+	if err != nil {
+		log.Fatal(err)
+	}
+	msg, err := sip.ParseMsg(message)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
+		log.Fatal("wanted bye response 200 ok but got:", msg.Status, msg.Phrase)
 	}
 	sipConnection.Close()
 	log.Println("Hung up")
@@ -260,7 +271,7 @@ func sendSipInvite(invite *sip.Msg, sipConnection *websocket.Conn) {
 		log.Fatal("send sip over websocket: ", err)
 	}
 	log.Print("send sip over websocket done")
-	// log.Printf(">>>\n%s\n", b.String())
+	log.Printf(">>>\n%s\n", b.String())
 }
 
 func buildSipInvite(room string, host string, rtpaddr *net.UDPAddr) *sip.Msg {
@@ -273,6 +284,8 @@ func buildSipInvite(room string, host string, rtpaddr *net.UDPAddr) *sip.Msg {
 	codecs = append(codecs, sdp.Opus)
 	callID := util.GenerateCallID()
 	log.Println("CallID: ", callID)
+	opus := sdp.Codec{PT: 111, Name: "opus", Rate: 48000, Param: "1"}
+	// opus := sdp.Codec{PT: 111, Name: "opus", Rate: 48000, Param: "2"}
 	return &sip.Msg{
 		CallID:     callID,
 		CSeq:       util.GenerateCSeq(),
@@ -325,6 +338,7 @@ func buildSipInvite(room string, host string, rtpaddr *net.UDPAddr) *sip.Msg {
 		Supported: "outbound",
 		// Payload:   sdp.New(rtpaddr, sdp.StandardCodecs[11]),
 		// Payload: sdp.New(rtpaddr, codecs...),
-		Payload: sdp.New(rtpaddr, sdp.Opus),
+		// Payload: sdp.New(rtpaddr, sdp.Opus),
+		Payload: sdp.New(rtpaddr, opus),
 	}
 }

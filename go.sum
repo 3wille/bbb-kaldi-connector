@@ -6,3 +6,5 @@ github.com/thanhpk/randstr v1.0.4 h1:IN78qu/bR+My+gHCvMEXhR/i5oriVHcTB/BJJIRTsNo
 github.com/thanhpk/randstr v1.0.4/go.mod h1:M/H2P1eNLZzlDwAzpkkkUvoyNNMbzRGhESZuEQk3r0U=
 github.com/wernerd/GoRTP v0.0.0-20191206100804-75c6a1c64532 h1:ArPnzV35847cYJRoYrSJNcJB+bwH3hc6Ej/B3PWrTZo=
 github.com/wernerd/GoRTP v0.0.0-20191206100804-75c6a1c64532/go.mod h1:ioxC5krSXj8uaqqRPoeCSURAqfxeLNuq8RAt2+erdgk=
+gopkg.in/hraban/opus.v2 v2.0.0-20200710132758-e28f8214483b h1:ThVo35Ms4RdZape8OwJFcICfT0+oQ2iVn7yGXRDwA08=
+gopkg.in/hraban/opus.v2 v2.0.0-20200710132758-e28f8214483b/go.mod h1:/L5E7a21VWl8DeuCPKxQBdVG5cy+L0MRZ08B1wnqt7g=
