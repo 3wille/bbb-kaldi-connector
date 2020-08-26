@@ -80,34 +80,13 @@ func main() {
 	}
 	log.Print(remoteRTPAddr)
 
-	// Create a UDP transport with "local" address and use this for a "local" RTP session
-	// The RTP session uses the transport to receive and send RTP packets to the remote peer.
-	tpLocal, err := rtp.NewTransportUDP(rtpAddr, rtpUDPAddr.Port, "")
-	if err != nil {
-		log.Fatal("Couln't set up TransportUDP")
-	}
-
-	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 2, "OPUS"}
-	// TransportUDP implements TransportWrite and TransportRecv interfaces thus
-	// use it as write and read modules for the Session.
-	rsLocal := rtp.NewSession(tpLocal, tpLocal)
-	strLocalIdx, err := rsLocal.NewSsrcStreamOut(
-		&rtp.Address{rtpAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""}, 0, 0,
-	)
-	rsLocal.SsrcStreamOutForIndex(strLocalIdx).SetPayloadType(111)
-	_, err = rsLocal.AddRemote(
-		&rtp.Address{rtpUDPAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""},
-	)
+	rsLocal, err := prepareRTPSession(rtpAddr, rtpUDPAddr)
 	if err != nil {
 		hangup(sipConnection, connected, stopLocalRecv)
 		log.Fatal("Couldn't create remote: ", err)
 	}
 	// go receivePacketLocal(rsLocal)
 	go func() {
-		// setup interrupt catcher
-		sigchan := make(chan os.Signal, 1)
-		signal.Notify(sigchan, os.Interrupt)
-
 		// Create and store the data receive channel.
 		dataReceiver := rsLocal.CreateDataReceiveChan()
 		cnt := 0
@@ -119,6 +98,9 @@ func main() {
 		}
 		defer file.Close()
 
+		// setup interrupt catcher
+		sigchan := make(chan os.Signal, 1)
+		signal.Notify(sigchan, os.Interrupt)
 		for {
 			select {
 			case rp := <-dataReceiver:
@@ -156,6 +138,28 @@ func main() {
 	time.Sleep(20 * time.Second)
 	log.Print("End")
 	hangup(sipConnection, connected, stopLocalRecv)
+}
+
+func prepareRTPSession(rtpAddr *net.IPAddr, rtpUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
+	// Create a UDP transport with "local" address and use this for a "local" RTP session
+	// The RTP session uses the transport to receive and send RTP packets to the remote peer.
+	tpLocal, err := rtp.NewTransportUDP(rtpAddr, rtpUDPAddr.Port, "")
+	if err != nil {
+		log.Fatal("Couln't set up TransportUDP")
+	}
+
+	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 2, "OPUS"}
+	// TransportUDP implements TransportWrite and TransportRecv interfaces thus
+	// use it as write and read modules for the Session.
+	rsLocal = rtp.NewSession(tpLocal, tpLocal)
+	strLocalIdx, err := rsLocal.NewSsrcStreamOut(
+		&rtp.Address{rtpAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""}, 0, 0,
+	)
+	rsLocal.SsrcStreamOutForIndex(strLocalIdx).SetPayloadType(111)
+	_, err = rsLocal.AddRemote(
+		&rtp.Address{rtpUDPAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""},
+	)
+	return
 }
 
 func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
