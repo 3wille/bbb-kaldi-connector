@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/3wille/sip-go/wernerd-GoRTP/src/net/rtp"
@@ -21,8 +22,8 @@ import (
 
 func main() {
 	host := "ltbbb1.informatik.uni-hamburg.de"
-	room := "13036"
-	sessionToken := "hag27lvy53sqbx07"
+	room := "19075"
+	sessionToken := "0iyjgyducdf0xhqv"
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: "/ws", RawQuery: fmt.Sprintf("sessionToken=%v", sessionToken)}
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
@@ -86,14 +87,14 @@ func main() {
 		log.Fatal("Couln't set up TransportUDP")
 	}
 
-	rtp.PayloadFormatMap[98] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 2, "OPUS"}
+	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 2, "OPUS"}
 	// TransportUDP implements TransportWrite and TransportRecv interfaces thus
 	// use it as write and read modules for the Session.
 	rsLocal := rtp.NewSession(tpLocal, tpLocal)
 	strLocalIdx, err := rsLocal.NewSsrcStreamOut(
 		&rtp.Address{rtpAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""}, 0, 0,
 	)
-	rsLocal.SsrcStreamOutForIndex(strLocalIdx).SetPayloadType(0)
+	rsLocal.SsrcStreamOutForIndex(strLocalIdx).SetPayloadType(111)
 	_, err = rsLocal.AddRemote(
 		&rtp.Address{rtpUDPAddr.IP, rtpUDPAddr.Port, rtpUDPAddr.Port + 1, ""},
 	)
@@ -103,6 +104,10 @@ func main() {
 	}
 	// go receivePacketLocal(rsLocal)
 	go func() {
+		// setup interrupt catcher
+		sigchan := make(chan os.Signal, 1)
+		signal.Notify(sigchan, os.Interrupt)
+
 		// Create and store the data receive channel.
 		dataReceiver := rsLocal.CreateDataReceiveChan()
 		cnt := 0
@@ -118,14 +123,19 @@ func main() {
 			select {
 			case rp := <-dataReceiver:
 				log.Println("Remote receiver got:", cnt, "packets")
-				log.Println(rp.Payload())
-				log.Println(len(rp.Payload()))
+				// log.Println(rp.Payload())
+				log.Println(rp.PayloadType())
+				// log.Println(len(rp.Payload()))
 				file.Write(rp.Payload())
 				cnt++
 				rp.FreePacket()
 				file.Sync()
 			case <-stopLocalRecv:
+				log.Println("stop receiving")
 				return
+			case <-sigchan:
+				hangup(sipConnection, connected, stopLocalRecv)
+				os.Exit(1)
 			}
 		}
 	}()
@@ -134,13 +144,14 @@ func main() {
 	if err != nil {
 		log.Fatal("Couldn't start session: ", err)
 	}
-	payloadByteSlice := make([]byte, 2)
-	rp := rsLocal.NewDataPacket(1)
-	rp.SetPayload(payloadByteSlice)
-	rsLocal.WriteData(rp)
-	rp.FreePacket()
-
 	ack200Ok(sipConnection, invite, msg)
+
+	// write example
+	// payloadByteSlice := make([]byte, 2)
+	// rp := rsLocal.NewDataPacket(1)
+	// rp.SetPayload(payloadByteSlice)
+	// rsLocal.WriteData(rp)
+	// rp.FreePacket()
 
 	time.Sleep(20 * time.Second)
 	log.Print("End")
@@ -200,7 +211,7 @@ func hangup(sipConnection *websocket.Conn, connected bool, stopLocalRecv chan bo
 		log.Println("send BYE over websocket")
 
 		// Wait for acknowledgment of hangup.
-		sipConnection.SetReadDeadline(time.Now().Add(time.Second * 2))
+		sipConnection.SetReadDeadline(time.Now().Add(time.Second * 3))
 		_, message, err := sipConnection.ReadMessage()
 		if err != nil {
 			log.Fatal(err)
@@ -251,8 +262,15 @@ func sendSipInvite(invite *sip.Msg, sipConnection *websocket.Conn) {
 func buildSipInvite(room string, host string, rtpaddr *net.UDPAddr) *sip.Msg {
 	userHost := fmt.Sprintf("%v.invalid", randstr.String(8))
 	userID := fmt.Sprintf("%v-SIP-TEST", randstr.String(8))
+	codecs := []sdp.Codec{}
+	for _, value := range sdp.StandardCodecs {
+		codecs = append(codecs, value)
+	}
+	codecs = append(codecs, sdp.Opus)
+	callID := util.GenerateCallID()
+	log.Println("CallID: ", callID)
 	return &sip.Msg{
-		CallID:     util.GenerateCallID(),
+		CallID:     callID,
 		CSeq:       util.GenerateCSeq(),
 		Method:     "INVITE",
 		CSeqMethod: "INVITE",
@@ -301,7 +319,8 @@ func buildSipInvite(room string, host string, rtpaddr *net.UDPAddr) *sip.Msg {
 		Allow:     "ACK,CANCEL,INVITE,MESSAGE,BYE,OPTIONS,INFO,NOTIFY,REFER",
 		UserAgent: "gosip/1.o",
 		Supported: "outbound",
-		Payload:   sdp.New(rtpaddr, sdp.ULAWCodec),
-		// Payload:   sdp.New(rtpaddr, sdp.Opus),
+		// Payload:   sdp.New(rtpaddr, sdp.StandardCodecs[11]),
+		// Payload: sdp.New(rtpaddr, codecs...),
+		Payload: sdp.New(rtpaddr, sdp.Opus),
 	}
 }
