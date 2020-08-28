@@ -7,19 +7,17 @@ import (
 	"log"
 	"net"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/3wille/sip-go/wernerd-GoRTP/src/net/rtp"
-
 	"github.com/gomodule/redigo/redis"
+	"gopkg.in/hraban/opus.v2"
+
 	"github.com/gorilla/websocket"
 	"github.com/jart/gosip/sdp"
 	"github.com/jart/gosip/sip"
 	"github.com/jart/gosip/util"
 	"github.com/thanhpk/randstr"
-
-	"gopkg.in/hraban/opus.v2"
 )
 
 func main() {
@@ -32,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal("sip dial: ", err)
 	}
-	stopSignal := make(chan bool)
+	stopSignal := make(chan bool, 1)
 
 	// done := make(chan struct{})
 	// go func() {
@@ -58,13 +56,13 @@ func main() {
 		log.Fatal("rtp listen:", err)
 		return
 	}
-	defer rtpsock.Close()
+	// defer rtpsock.Close()
 	rtpUDPAddr := rtpsock.LocalAddr().(*net.UDPAddr)
 	log.Print(rtpUDPAddr)
 
 	// Create an invite message and attach the SDP.
 	invite := buildSipInvite(room, host, rtpUDPAddr)
-	defer hangup(sipConnection, stopSignal, invite)
+	// defer hangup(sipConnection, stopSignal, invite)
 
 	sendSipInvite(invite, sipConnection)
 
@@ -106,19 +104,19 @@ func main() {
 	// log.Print("Subscribed to channels")
 	// done := make(chan error, 1)
 	// redisConnected := make(chan bool, 1)
-	log.Print("sending status to asr_control")
-	reply, err := redisConnection.Do("PUBLISH", "asr_control", "status")
-	log.Print("converting")
-	var receivedBy int
-	switch reply := reply.(type) {
-	case int64:
-		receivedBy = int(reply)
-	}
-	if err != nil {
-		hangup(sipConnection, stopSignal, invite)
-		log.Fatal("Couldn't publish status:", err)
-	}
-	log.Printf("Send status to %v clients", receivedBy)
+	// log.Print("sending status to asr_control")
+	// reply, err := redisConnection.Do("PUBLISH", "asr_control", "status")
+	// log.Print("converting")
+	// var receivedBy int
+	// switch reply := reply.(type) {
+	// case int64:
+	// 	receivedBy = int(reply)
+	// }
+	// if err != nil {
+	// 	hangup(sipConnection, stopSignal, invite)
+	// 	log.Fatal("Couldn't publish status:", err)
+	// }
+	// log.Printf("Send status to %v clients", receivedBy)
 
 	// go func() {
 	// 	for {
@@ -166,12 +164,6 @@ func main() {
 		for {
 			select {
 			case rp := <-dataReceiver:
-				// log.Println("Remote receiver got:", cnt, "packets")
-				// log.Println(rp.Payload())
-				// log.Println(rp.Sequence())
-				// log.Println(rp.Timestamp())
-				// log.Println(rp.PayloadType())
-				log.Println("Len: ", len(rp.Payload()))
 				payload := rp.Payload()
 				// var frameSizeMs float64 = 60 // if you don't know, go with 60 ms.
 				// channels := 1.0
@@ -180,25 +172,24 @@ func main() {
 				frameSize := 1024
 				pcm := make([]int16, int(frameSize))
 				sampleCount, err := dec.Decode(payload, pcm)
+				_ = sampleCount
 				if err != nil {
 					log.Println("Couldn't decode frame")
 				}
-				log.Println((sampleCount))
 				cnt++
 				pcmBytes := make([]byte, 0, 2048)
-				for _, in := range pcm {
-					b := make([]byte, 2)
-					binary.LittleEndian.PutUint16(b, uint16(in))
-					pcmBytes = append(pcmBytes, b...)
+				for _, pcmSample := range pcm {
+					pcmSampleBytes := make([]byte, 2)
+					binary.LittleEndian.PutUint16(pcmSampleBytes, uint16(pcmSample))
+					pcmBytes = append(pcmBytes, pcmSampleBytes...)
 				}
 				log.Println("publishing audio: ", pcm)
 				receivedBy, err := redis.Int(redisConnection.Do("PUBLISH", "asr_audio", pcmBytes))
 				if err != nil {
 					log.Println("Couldn't publish audio:", err)
 				}
-				log.Printf("Send audio to %v client", receivedBy)
+				log.Printf("Send audio to %v clients", receivedBy)
 				rp.FreePacket()
-				// file.Sync()
 			case <-stopSignal:
 				log.Println("stop receiving")
 				return
@@ -220,10 +211,8 @@ func main() {
 	// rp.FreePacket()
 
 	time.Sleep(10 * time.Second)
-	log.Print("End")
 	rsLocal.CloseSession()
 	hangup(sipConnection, stopSignal, invite)
-	os.Exit(0)
 }
 
 func prepareRTPSession(rtpAddr *net.IPAddr, rtpUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
@@ -261,6 +250,7 @@ func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
 		log.Fatal("parse 200 ok:", err)
 	}
 	if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
+		log.Printf("<<< \n%s\n", string(message))
 		log.Fatal("wanted 200 ok but got:", msg.Status, msg.Phrase)
 	}
 	return msg
@@ -306,22 +296,23 @@ func hangup(sipConnection *websocket.Conn, stopLocalRecv chan bool, invite *sip.
 	// log.Println(b.String())
 
 	// Wait for acknowledgment of hangup.
+	log.Print("waiting for bye ack")
 	sipConnection.SetReadDeadline(time.Now().Add(time.Second * 3))
 	_, message, err := sipConnection.ReadMessage()
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 	}
 	msg, err := sip.ParseMsg(message)
 	if err != nil {
-		log.Fatal(err)
-	}
-	if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
-		log.Fatal("wanted bye response 200 ok but got:", msg.Status, msg.Phrase)
+		log.Print(err)
+	} else if !msg.IsResponse() || msg.Status != 200 || msg.Phrase != "OK" {
+		log.Print("wanted bye response 200 ok but got:", msg.Status, msg.Phrase)
+	} else {
+		log.Println("Hung up")
 	}
 	sipConnection.Close()
-	log.Println("Hung up")
-	stopLocalRecv <- true
-	os.Exit(0)
+	// stopLocalRecv <- true
+	// os.Exit(0)
 }
 
 func waitFor100Trying(sipConnection *websocket.Conn) {
@@ -339,6 +330,7 @@ func waitFor100Trying(sipConnection *websocket.Conn) {
 		log.Fatal("parse 100 trying", err)
 	}
 	if !msg.IsResponse() || msg.Status != 100 || msg.Phrase != "Trying" {
+		log.Printf("<<< %s\n", string(message))
 		log.Fatal("didn't get 100 trying :[")
 	}
 }
