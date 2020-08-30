@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/3wille/sip-go/wernerd-GoRTP/src/net/rtp"
@@ -22,8 +23,8 @@ import (
 
 func main() {
 	host := "ltbbb1.informatik.uni-hamburg.de"
-	room := "29981"
-	sessionToken := "oz0jlu8khacic1fa"
+	room := "39146"
+	sessionToken := "pnl1vdpu2z7kmvy8"
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: "/ws", RawQuery: fmt.Sprintf("sessionToken=%v", sessionToken)}
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
@@ -72,8 +73,10 @@ func main() {
 
 	// Figure out where they want us to send RTP.
 	var remoteRTPAddr *net.UDPAddr
+	var pTime int
 	if sdpMsg, ok := msg.Payload.(*sdp.SDP); ok {
 		remoteRTPAddr = &net.UDPAddr{IP: net.ParseIP(sdpMsg.Addr), Port: int(sdpMsg.Audio.Port)}
+		pTime = sdpMsg.Ptime
 	} else {
 		log.Fatal("200 ok didn't have sdp payload")
 	}
@@ -151,6 +154,9 @@ func main() {
 		// Create and store the data receive channel.
 		dataReceiver := rsLocal.CreateDataReceiveChan()
 		cnt := 0
+		wrongSequences := -1 // first package is always wrong bc we can't guess Sequence
+		doubleFrames := 0
+		skippedFrames := 0
 
 		dec, err := opus.NewDecoder(48000, 1)
 		if err != nil {
@@ -158,40 +164,69 @@ func main() {
 			log.Fatal("Couldn't open OPUS decoder")
 		}
 
-		// setup interrupt catcher
-		// sigchan := make(chan os.Signal, 1)
-		// signal.Notify(sigchan, os.Interrupt)
+		// Destination file
+		debugRecorder, err := os.Create("test.pcm")
+		if err != nil {
+			hangup(sipConnection, stopSignal, invite)
+			log.Fatal(fmt.Sprintf("couldn't create output file - %v", err))
+		}
+
+		var lastSequenceNumber uint16
+		// var lastTimestamp uint32
 		for {
 			select {
 			case rp := <-dataReceiver:
+				rp.Print("a")
 				payload := rp.Payload()
-				// var frameSizeMs float64 = 60 // if you don't know, go with 60 ms.
-				// channels := 1.0
-				// sampleRate := 16000.0
-				// frameSize := channels * frameSizeMs * sampleRate / 1000
-				frameSize := 1024
+				newSequenceNumber := rp.Sequence()
+				// newTimestamp := rp.Timestamp()
+				if newSequenceNumber != lastSequenceNumber+1 {
+					wrongSequences++
+					if newSequenceNumber == lastSequenceNumber {
+						doubleFrames++
+					} else if newSequenceNumber == lastSequenceNumber+2 {
+						skippedFrames++
+					}
+				}
+				var frameSizeMs = pTime // if you don't know, go with 60 ms.
+				channels := 1.0
+				sampleRate := 48000.0
+				// 48000Hz & 20ms ptime = 960 samples per frame
+				frameSize := int(channels * float64(frameSizeMs) * sampleRate / 1000)
+				// frameSize := 5760
 				pcm := make([]int16, int(frameSize))
 				sampleCount, err := dec.Decode(payload, pcm)
-				_ = sampleCount
 				if err != nil {
 					log.Println("Couldn't decode frame")
 				}
 				cnt++
-				pcmBytes := make([]byte, 0, 2048)
-				for _, pcmSample := range pcm {
+				log.Println("Relayed packages: ", cnt)
+				pcmBytes := make([]byte, 0, frameSize*2)
+				for _, pcmSample := range pcm[:sampleCount] {
 					pcmSampleBytes := make([]byte, 2)
 					binary.LittleEndian.PutUint16(pcmSampleBytes, uint16(pcmSample))
 					pcmBytes = append(pcmBytes, pcmSampleBytes...)
 				}
-				log.Println("publishing audio: ", pcm)
-				receivedBy, err := redis.Int(redisConnection.Do("PUBLISH", "asr_audio", pcmBytes))
+				// log.Println("publishing audio: ", pcmBytes)
+				receivedBy, err := redis.Int(redisConnection.Do(
+					"PUBLISH", "asr_audio", pcmBytes[:sampleCount*2]))
 				if err != nil {
 					log.Println("Couldn't publish audio:", err)
 				}
+				_, err = debugRecorder.Write(pcmBytes)
+				if err != nil {
+					hangup(sipConnection, stopSignal, invite)
+					log.Print("failed to write debug: ", err)
+				}
 				log.Printf("Send audio to %v clients", receivedBy)
+				lastSequenceNumber = newSequenceNumber
 				rp.FreePacket()
 			case <-stopSignal:
 				log.Println("stop receiving")
+				log.Print(wrongSequences)
+				log.Print(doubleFrames)
+				log.Print(skippedFrames)
+				debugRecorder.Close()
 				return
 			}
 		}
@@ -210,7 +245,18 @@ func main() {
 	// rsLocal.WriteData(rp)
 	// rp.FreePacket()
 
-	time.Sleep(10 * time.Second)
+	// sigchan := make(chan os.Signal, 1)
+	// signal.Notify(sigchan, os.Interrupt)
+
+	// for {
+	// 	select {
+	// 	case <-sigchan:
+	// 		rsLocal.CloseSession()
+	// 		hangup(sipConnection, stopSignal, invite)
+	// 		return
+	// 	}
+	// }
+	time.Sleep(5 * time.Second)
 	rsLocal.CloseSession()
 	hangup(sipConnection, stopSignal, invite)
 }
@@ -244,7 +290,7 @@ func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
 	if err != nil {
 		log.Fatal("read 200 ok:", err)
 	}
-	// log.Printf("<<< \n%s\n", string(message))
+	log.Printf("<<< \n%s\n", string(message))
 	msg, err := sip.ParseMsg(message)
 	if err != nil {
 		log.Fatal("parse 200 ok:", err)
