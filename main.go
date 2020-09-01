@@ -23,8 +23,8 @@ import (
 
 func main() {
 	host := "ltbbb1.informatik.uni-hamburg.de"
-	room := "39146"
-	sessionToken := "pnl1vdpu2z7kmvy8"
+	room := "50759"
+	sessionToken := "3wimoyhimqwqqhce"
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: "/ws", RawQuery: fmt.Sprintf("sessionToken=%v", sessionToken)}
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
@@ -32,6 +32,7 @@ func main() {
 		log.Fatal("sip dial: ", err)
 	}
 	stopSignal := make(chan bool, 1)
+	startRelay := make(chan bool, 1)
 
 	// done := make(chan struct{})
 	// go func() {
@@ -157,6 +158,7 @@ func main() {
 		wrongSequences := -1 // first package is always wrong bc we can't guess Sequence
 		doubleFrames := 0
 		skippedFrames := 0
+		relayStarted := false
 
 		dec, err := opus.NewDecoder(48000, 1)
 		if err != nil {
@@ -176,6 +178,10 @@ func main() {
 		for {
 			select {
 			case rp := <-dataReceiver:
+				if !relayStarted {
+					log.Print("Waiting for 'you are muted' to end")
+					continue
+				}
 				rp.Print("a")
 				payload := rp.Payload()
 				newSequenceNumber := rp.Sequence()
@@ -228,6 +234,8 @@ func main() {
 				log.Print(skippedFrames)
 				debugRecorder.Close()
 				return
+			case <-startRelay:
+				relayStarted = true
 			}
 		}
 	}()
@@ -256,6 +264,8 @@ func main() {
 	// 		return
 	// 	}
 	// }
+	time.Sleep(5 * time.Second)
+	startRelay <- true
 	time.Sleep(5 * time.Second)
 	rsLocal.CloseSession()
 	hangup(sipConnection, stopSignal, invite)
