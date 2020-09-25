@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -21,10 +22,70 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
+type redisMessage struct {
+	Core struct {
+		Header struct {
+			Name string `json:"name"`
+		} `json:"header"`
+		Body struct {
+			Props struct {
+				VoiceProp struct {
+					VoiceConf string `json:"voiceConf"`
+				} `json:"voiceProp"`
+			} `json:"props"`
+		} `json:"body"`
+	} `json:"core"`
+}
+
 func main() {
+	log.Println("Setting up redis connection")
+	redisConnection, err := redis.Dial("tcp", "127.0.0.1:6379",
+		redis.DialReadTimeout(10*time.Second),
+		redis.DialWriteTimeout(10*time.Second))
+	if err != nil {
+		log.Fatal("Couldn't connect to redis: ", err)
+	}
+	defer redisConnection.Close()
+	log.Print("Connected to redis")
+	channels := []string{"to-akka-apps-redis-channel"}
+	pubSubConn := redis.PubSubConn{Conn: redisConnection}
+	err = pubSubConn.Subscribe(redis.Args{}.AddFlat(channels)...)
+	if err != nil {
+		log.Fatal("Couldn't subscribe to BBB channels: ", err)
+	}
+	log.Print("Subscribed to channels")
+	for {
+		switch v := pubSubConn.Receive().(type) {
+		case redis.Message:
+			sipExtension := parseExtensionFromRedisMessage(v)
+			if sipExtension == "" {
+				continue
+			}
+			log.Println(sipExtension)
+			sessionToken := "3wimoyhimqwqqhce"
+			relay(sipExtension, sessionToken)
+		// case redis.Subscription:
+		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
+		case error:
+			log.Print(v)
+		}
+	}
+}
+
+func parseExtensionFromRedisMessage(v redis.Message) (sipExtension string) {
+	// fmt.Printf("%s: message: %s\n", v.Channel, v.Data)
+	var message redisMessage
+	json.Unmarshal(v.Data, &message)
+	// fmt.Println(message)
+	// log.Println(message)
+	if message.Core.Header.Name == "CreateMeetingReqMsg" {
+		sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
+	}
+	return
+}
+
+func relay(room string, sessionToken string) {
 	host := "ltbbb1.informatik.uni-hamburg.de"
-	room := "50759"
-	sessionToken := "3wimoyhimqwqqhce"
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: "/ws", RawQuery: fmt.Sprintf("sessionToken=%v", sessionToken)}
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
