@@ -29,6 +29,9 @@ type redisMessage struct {
 		} `json:"header"`
 		Body struct {
 			Props struct {
+				MeetingProp struct {
+					ExtID string `json:"extId"`
+				} `json:"meetingProp"`
 				VoiceProp struct {
 					VoiceConf string `json:"voiceConf"`
 				} `json:"voiceProp"`
@@ -57,13 +60,13 @@ func main() {
 	for {
 		switch v := pubSubConn.Receive().(type) {
 		case redis.Message:
-			sipExtension := parseExtensionFromRedisMessage(v)
+			sipExtension, meetingID := parseMeetingDataFromRedisMessage(v)
 			if sipExtension == "" {
 				continue
 			}
-			log.Println(sipExtension)
+			log.Println(meetingID)
 			sessionToken := "3wimoyhimqwqqhce"
-			relay(sipExtension, sessionToken)
+			go relay(sipExtension, sessionToken)
 		// case redis.Subscription:
 		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
@@ -72,7 +75,7 @@ func main() {
 	}
 }
 
-func parseExtensionFromRedisMessage(v redis.Message) (sipExtension string) {
+func parseMeetingDataFromRedisMessage(v redis.Message) (sipExtension string, meetingID string) {
 	// fmt.Printf("%s: message: %s\n", v.Channel, v.Data)
 	var message redisMessage
 	json.Unmarshal(v.Data, &message)
@@ -80,13 +83,15 @@ func parseExtensionFromRedisMessage(v redis.Message) (sipExtension string) {
 	// log.Println(message)
 	if message.Core.Header.Name == "CreateMeetingReqMsg" {
 		sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
+		meetingID = message.Core.Body.Props.MeetingProp.ExtID
 	}
 	return
 }
 
 func relay(room string, sessionToken string) {
 	host := "ltbbb1.informatik.uni-hamburg.de"
-	sipURL := url.URL{Scheme: "wss", Host: host, Path: "/ws", RawQuery: fmt.Sprintf("sessionToken=%v", sessionToken)}
+	secretToken := os.Args[1]
+	sipURL := url.URL{Scheme: "wss", Host: host, Path: fmt.Sprintf("ws_%v", secretToken)}
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
 	if err != nil {
