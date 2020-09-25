@@ -221,7 +221,6 @@ func (rs *Session) NewSsrcStreamOut(own *Address, ssrc uint32, sequenceNo uint16
 	rs.streamsOut[rs.streamOutIndex] = str
 	index = rs.streamOutIndex
 	rs.streamOutIndex++
-
 	return
 }
 
