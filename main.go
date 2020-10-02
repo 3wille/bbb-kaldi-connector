@@ -44,8 +44,8 @@ type redisMessage struct {
 func main() {
 	log.Println("Setting up redis connection")
 	redisConnection, err := redis.Dial("tcp", "127.0.0.1:6379",
-		redis.DialReadTimeout(10*time.Second),
-		redis.DialWriteTimeout(10*time.Second))
+		redis.DialReadTimeout(time.Minute),
+		redis.DialWriteTimeout(time.Minute))
 	if err != nil {
 		log.Fatal("Couldn't connect to redis: ", err)
 	}
@@ -71,7 +71,7 @@ func main() {
 		// case redis.Subscription:
 		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
-			log.Print(v)
+			log.Fatal(v)
 		}
 	}
 }
@@ -101,23 +101,6 @@ func relay(room string, sessionToken string) {
 	stopSignal := make(chan bool, 1)
 	startRelay := make(chan bool, 1)
 
-	// done := make(chan struct{})
-	// go func() {
-	// 	defer close(done)
-	// 	for {
-	// 		_, message, err := sipConnection.ReadMessage()
-	// 		if err != nil {
-	// 			log.Println("read:", err)
-	// 			return
-	// 		}
-	// 		log.Printf("recv: %s", message)
-	// 	}
-	// }()
-
-	// Connect to the remote SIP UDP endpoint.
-	// raddr := sipConnection.RemoteAddr().(*net.UDPAddr)
-	// laddr := sipConnection.LocalAddr().(*net.UDPAddr)
-
 	// Create an RTP socket.
 	rtpsock, err := net.ListenPacket("udp4", "134.100.15.197:4002")
 	rtpAddr, _ := net.ResolveIPAddr("ip", "134.100.15.197")
@@ -131,12 +114,8 @@ func relay(room string, sessionToken string) {
 
 	// Create an invite message and attach the SDP.
 	invite := buildSipInvite(room, host, rtpUDPAddr)
-	// defer hangup(sipConnection, stopSignal, invite)
-
 	sendSipInvite(invite, sipConnection)
-
 	waitFor100Trying(sipConnection)
-
 	msg := waitFor200Ok(sipConnection)
 
 	// Figure out where they want us to send RTP.
@@ -166,58 +145,7 @@ func relay(room string, sessionToken string) {
 	}
 	defer redisConnection.Close()
 	log.Print("Connected to redis")
-	// channels := []string{"asr", "asr_control"}
-	// pubSubConn := redis.PubSubConn{Conn: redisConnection}
-	// err = pubSubConn.Subscribe(redis.Args{}.AddFlat(channels)...)
-	// if err != nil {
-	// 	log.Fatal("Couldn't subscribe to ASR channel: ", err)
-	// }
-	// log.Print("Subscribed to channels")
-	// done := make(chan error, 1)
-	// redisConnected := make(chan bool, 1)
-	// log.Print("sending status to asr_control")
-	// reply, err := redisConnection.Do("PUBLISH", "asr_control", "status")
-	// log.Print("converting")
-	// var receivedBy int
-	// switch reply := reply.(type) {
-	// case int64:
-	// 	receivedBy = int(reply)
-	// }
-	// if err != nil {
-	// 	hangup(sipConnection, stopSignal, invite)
-	// 	log.Fatal("Couldn't publish status:", err)
-	// }
-	// log.Printf("Send status to %v clients", receivedBy)
 
-	// go func() {
-	// 	for {
-	// 		switch {
-	// 		case <-stopSignal:
-	// 			done <- nil
-	// 			return
-	// 		}
-	// 		switch n := pubSubConn.Receive().(type) {
-	// 		case error:
-	// 			done <- n
-	// 			return
-	// 		case redis.Message:
-	// 			channel := n.Channel
-	// 			message := n.Data
-	// 			fmt.Printf("channel: %s, message: %s\n", channel, message)
-	// 		case redis.Subscription:
-	// 			switch n.Count {
-	// 			case len(channels):
-	// 				// redisConnected <- true
-	// 			case 0:
-	// 				// Return from the goroutine when all channels are unsubscribed.
-	// 				done <- nil
-	// 				return
-	// 			}
-	// 		}
-	// 	}
-	// }()
-
-	// go receivePacketLocal(rsLocal)
 	go func() {
 		// Create and store the data receive channel.
 		dataReceiver := rsLocal.CreateDataReceiveChan()
@@ -327,33 +255,7 @@ func relay(room string, sessionToken string) {
 
 	sipChannel := make(chan *sip.Msg, 50)
 	go listenForSipMessages(sipConnection, sipChannel, rtpUDPAddr)
-	// write example
-	go func() {
-		const sampleRate = 48000
-		const channels = 1 // mono; 2 for stereo
-
-		enc, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
-		if err != nil {
-			hangup(sipConnection, stopSignal, invite)
-			log.Print("failed to create opus encoder: ", err)
-		}
-		var pcm []int16 = make([]int16, 960)
-		data := make([]byte, 960)
-		_, err = enc.Encode(pcm, data)
-		if err != nil {
-			hangup(sipConnection, stopSignal, invite)
-			log.Print("failed to encode pcm: ", err)
-		}
-		timestamp := uint32(0)
-		for {
-			time.Sleep(time.Duration(time.Second * 10))
-			rp := rsLocal.NewDataPacket(timestamp)
-			timestamp += 960
-			rp.SetPayload(data)
-			rsLocal.WriteData(rp)
-			rp.FreePacket()
-		}
-	}()
+	// go sendBogusOpus(sipConnection, stopSignal, invite, rsLocal)
 
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, os.Interrupt)
@@ -372,6 +274,34 @@ func relay(room string, sessionToken string) {
 	// time.Sleep(5 * time.Second)
 	// rsLocal.CloseSession()
 	// hangup(sipConnection, stopSignal, invite)
+}
+
+func sendBogusOpus(sipConnection *websocket.Conn, stopSignal chan bool,
+	invite *sip.Msg, rsLocal *rtp.Session) {
+	const sampleRate = 48000
+	const channels = 1 // mono; 2 for stereo
+
+	enc, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
+	if err != nil {
+		hangup(sipConnection, stopSignal, invite)
+		log.Print("failed to create opus encoder: ", err)
+	}
+	var pcm []int16 = make([]int16, 960)
+	data := make([]byte, 960)
+	_, err = enc.Encode(pcm, data)
+	if err != nil {
+		hangup(sipConnection, stopSignal, invite)
+		log.Print("failed to encode pcm: ", err)
+	}
+	timestamp := uint32(0)
+	for {
+		time.Sleep(time.Duration(time.Second * 10))
+		rp := rsLocal.NewDataPacket(timestamp)
+		timestamp += 960
+		rp.SetPayload(data)
+		rsLocal.WriteData(rp)
+		rp.FreePacket()
+	}
 }
 
 func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remoteRTPUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
