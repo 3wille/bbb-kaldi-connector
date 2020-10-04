@@ -66,8 +66,7 @@ func main() {
 				continue
 			}
 			log.Println(meetingID)
-			sessionToken := "3wimoyhimqwqqhce"
-			go relay(sipExtension, sessionToken)
+			go relay(sipExtension, "asr_audio")
 		// case redis.Subscription:
 		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
@@ -89,7 +88,7 @@ func parseMeetingDataFromRedisMessage(v redis.Message) (sipExtension string, mee
 	return
 }
 
-func relay(room string, sessionToken string) {
+func relay(room string, audioPublishChannelName string) {
 	host := "ltbbb1.informatik.uni-hamburg.de"
 	secretToken := os.Args[1]
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: fmt.Sprintf("ws_%v", secretToken)}
@@ -214,7 +213,7 @@ func relay(room string, sessionToken string) {
 				}
 				// log.Println("publishing audio: ", pcmBytes)
 				receivedBy, err := redis.Int(redisConnection.Do(
-					"PUBLISH", "asr_audio", pcmBytes[:sampleCount*2]))
+					"PUBLISH", audioPublishChannelName, pcmBytes[:sampleCount*2]))
 				_ = receivedBy
 				if err != nil {
 					log.Println("Couldn't publish audio:", err)
