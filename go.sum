@@ -1,3 +1,5 @@
+github.com/3wille/sip-go v0.0.0-20201004173202-4f62f80f3ea7 h1:O1J2MYbER5Zy2fNfsxtS2g1JPahoL6N1OJijr1msCW8=
+github.com/3wille/sip-go v0.0.0-20201004173202-4f62f80f3ea7/go.mod h1:n8Ue8JbsIhtivXBTeRjzlhCHzflepS/1W8aG8H0jOro=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gomodule/redigo v1.8.2 h1:H5XSIre1MB5NbPYFp+i1NBbb5qN1W8Y8YAQoAYbkm8k=
 github.com/gomodule/redigo v1.8.2/go.mod h1:P9dn9mFrCBvWhGE1wpxx6fgq7BAeLBk+UUUzlpkBYO0=

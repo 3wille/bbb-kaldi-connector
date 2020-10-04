@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -12,7 +11,9 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/3wille/sip-go/wernerd-GoRTP/src/net/rtp"
+	"bbb-kaldi-connector/bbb"
+	"bbb-kaldi-connector/wernerd-GoRTP/src/net/rtp"
+
 	"github.com/gomodule/redigo/redis"
 	"gopkg.in/hraban/opus.v2"
 
@@ -23,45 +24,13 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
-type redisMessage struct {
-	Core struct {
-		Header struct {
-			Name string `json:"name"`
-		} `json:"header"`
-		Body struct {
-			Props struct {
-				MeetingProp struct {
-					ExtID string `json:"extId"`
-				} `json:"meetingProp"`
-				VoiceProp struct {
-					VoiceConf string `json:"voiceConf"`
-				} `json:"voiceProp"`
-			} `json:"props"`
-		} `json:"body"`
-	} `json:"core"`
-}
-
 func main() {
-	log.Println("Setting up redis connection")
-	redisConnection, err := redis.Dial("tcp", "127.0.0.1:6379",
-		redis.DialReadTimeout(time.Minute),
-		redis.DialWriteTimeout(time.Minute))
-	if err != nil {
-		log.Fatal("Couldn't connect to redis: ", err)
-	}
+	redisConnection, pubSubConn := bbb.SetupRedisPubSub()
 	defer redisConnection.Close()
-	log.Print("Connected to redis")
-	channels := []string{"to-akka-apps-redis-channel"}
-	pubSubConn := redis.PubSubConn{Conn: redisConnection}
-	err = pubSubConn.Subscribe(redis.Args{}.AddFlat(channels)...)
-	if err != nil {
-		log.Fatal("Couldn't subscribe to BBB channels: ", err)
-	}
-	log.Print("Subscribed to channels")
 	for {
 		switch v := pubSubConn.Receive().(type) {
 		case redis.Message:
-			sipExtension, meetingID := parseMeetingDataFromRedisMessage(v)
+			sipExtension, meetingID := bbb.ParseMeetingDataFromRedisMessage(v)
 			if sipExtension == "" {
 				continue
 			}
@@ -73,19 +42,6 @@ func main() {
 			log.Fatal(v)
 		}
 	}
-}
-
-func parseMeetingDataFromRedisMessage(v redis.Message) (sipExtension string, meetingID string) {
-	// fmt.Printf("%s: message: %s\n", v.Channel, v.Data)
-	var message redisMessage
-	json.Unmarshal(v.Data, &message)
-	// fmt.Println(message)
-	// log.Println(message)
-	if message.Core.Header.Name == "CreateMeetingReqMsg" {
-		sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
-		meetingID = message.Core.Body.Props.MeetingProp.ExtID
-	}
-	return
 }
 
 func relay(room string, audioPublishChannelName string) {
