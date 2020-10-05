@@ -30,7 +30,11 @@ func main() {
 	for {
 		switch v := pubSubConn.Receive().(type) {
 		case redis.Message:
-			sipExtension, meetingID := bbb.ParseMeetingDataFromRedisMessage(v)
+			message := bbb.ParseMessage(v)
+			if message.Core.Header.Name == "CreateMeetingReqMsg" {
+				sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
+				meetingID = message.Core.Body.Props.MeetingProp.ExtID
+			}
 			if sipExtension == "" {
 				continue
 			}

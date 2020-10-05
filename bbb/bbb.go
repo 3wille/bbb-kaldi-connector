@@ -45,15 +45,7 @@ func SetupRedisPubSub() (redis.Conn, redis.PubSubConn) {
 	return redisConnection, pubSubConn
 }
 
-func ParseMeetingDataFromRedisMessage(v redis.Message) (sipExtension string, meetingID string) {
-	// fmt.Printf("%s: message: %s\n", v.Channel, v.Data)
-	var message redisMessage
+func ParseMessage(v redis.Message) (message redisMessage) {
 	json.Unmarshal(v.Data, &message)
-	// fmt.Println(message)
-	// log.Println(message)
-	if message.Core.Header.Name == "CreateMeetingReqMsg" {
-		sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
-		meetingID = message.Core.Body.Props.MeetingProp.ExtID
-	}
 	return
 }
