@@ -5,5 +5,5 @@ This project relays audio from freeswitch to a [Kaldi-Model-Server](https://gith
 ## Usage 
 
 ```
-go run bbb_session_token freeswitch_token
+go run bbb_secret_path_token
 ```
