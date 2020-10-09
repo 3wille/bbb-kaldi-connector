@@ -46,13 +46,26 @@ func main() {
 				}
 				log.Println(meetingID)
 				go relay(sipExtension, "asr_audio")
+			} else if message.Core.Header.Name == "DestroyMeetingSysCmdMsg" {
+				meetingID := message.Core.Body.MeetingID
+				_ = meetingID
 			}
 		// case redis.Subscription:
 		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
-			log.Fatal(v)
+			logAndCaptureError(v, "redis error: ", v)
 		}
 	}
+}
+
+func logAndCaptureError(err error, v ...interface{}) {
+	sentry.CaptureException(err)
+	log.Println(v)
+}
+
+func logAndCaptureMessage(message string) {
+	sentry.CaptureMessage(message)
+	log.Println(message)
 }
 
 func relay(room string, audioPublishChannelName string) {
@@ -62,7 +75,7 @@ func relay(room string, audioPublishChannelName string) {
 	log.Print(sipURL.String())
 	sipConnection, _, err := websocket.DefaultDialer.Dial(sipURL.String(), nil)
 	if err != nil {
-		log.Fatal("sip dial: ", err)
+		logAndCaptureError(err, "sip dial: ", err)
 	}
 	stopSignal := make(chan bool, 1)
 	startRelay := make(chan bool, 1)
@@ -71,7 +84,7 @@ func relay(room string, audioPublishChannelName string) {
 	rtpsock, err := net.ListenPacket("udp4", "134.100.15.197:4002")
 	rtpAddr, _ := net.ResolveIPAddr("ip", "134.100.15.197")
 	if err != nil {
-		log.Fatal("rtp listen:", err)
+		logAndCaptureError(err, "rtp listen:", err)
 		return
 	}
 	// defer rtpsock.Close()
@@ -91,14 +104,14 @@ func relay(room string, audioPublishChannelName string) {
 		remoteRTPAddr = &net.UDPAddr{IP: net.ParseIP(sdpMsg.Addr), Port: int(sdpMsg.Audio.Port)}
 		pTime = sdpMsg.Ptime
 	} else {
-		log.Fatal("200 ok didn't have sdp payload")
+		logAndCaptureMessage("200 ok didn't have sdp payload")
 	}
 	log.Print(remoteRTPAddr)
 
 	rsLocal, err := prepareRTPSession(rtpAddr, rtpUDPAddr, remoteRTPAddr)
 	if err != nil {
 		hangup(sipConnection, stopSignal, invite)
-		log.Fatal("Couldn't create remote: ", err)
+		logAndCaptureError(err, "Couldn't create remote: ", err)
 	}
 
 	log.Println("Setting up redis connection")
@@ -107,7 +120,7 @@ func relay(room string, audioPublishChannelName string) {
 		redis.DialWriteTimeout(10*time.Second))
 	if err != nil {
 		hangup(sipConnection, stopSignal, invite)
-		log.Fatal("Couldn't connect to redis: ", err)
+		logAndCaptureError(err, "Couldn't connect to redis: ", err)
 	}
 	defer redisConnection.Close()
 	log.Print("Connected to redis")
@@ -125,14 +138,14 @@ func relay(room string, audioPublishChannelName string) {
 		dec, err := opus.NewDecoder(48000, 1)
 		if err != nil {
 			hangup(sipConnection, stopSignal, invite)
-			log.Fatal("Couldn't open OPUS decoder")
+			logAndCaptureError(err, "Couldn't open OPUS decoder")
 		}
 
 		// Destination file
 		debugRecorder, err := os.Create("test.pcm")
 		if err != nil {
 			hangup(sipConnection, stopSignal, invite)
-			log.Fatal(fmt.Sprintf("couldn't create output file - %v", err))
+			logAndCaptureError(err, "couldn't create output file - ", err)
 		}
 
 		var lastSequenceNumber uint16
@@ -166,7 +179,7 @@ func relay(room string, audioPublishChannelName string) {
 				pcm := make([]int16, int(frameSize))
 				sampleCount, err := dec.Decode(payload, pcm)
 				if err != nil {
-					log.Println("Couldn't decode frame")
+					logAndCaptureError(err, "Couldn't decode frame")
 				}
 				cnt++
 				if cnt%100 == 0 {
@@ -183,12 +196,12 @@ func relay(room string, audioPublishChannelName string) {
 					"PUBLISH", audioPublishChannelName, pcmBytes[:sampleCount*2]))
 				_ = receivedBy
 				if err != nil {
-					log.Println("Couldn't publish audio:", err)
+					logAndCaptureError(err, "Couldn't publish audio:", err)
 				}
 				_, err = debugRecorder.Write(pcmBytes)
 				if err != nil {
 					hangup(sipConnection, stopSignal, invite)
-					log.Print("failed to write debug: ", err)
+					logAndCaptureError(err, "failed to write debug: ", err)
 				}
 				// log.Printf("Send audio to %v clients", receivedBy)
 				lastSequenceNumber = newSequenceNumber
@@ -220,7 +233,7 @@ func relay(room string, audioPublishChannelName string) {
 	ack200Ok(sipConnection, invite, msg)
 
 	sipChannel := make(chan *sip.Msg, 50)
-	go listenForSipMessages(sipConnection, sipChannel, rtpUDPAddr)
+	go listenForSipMessages(sipConnection, sipChannel, rtpUDPAddr, room, audioPublishChannelName)
 	// go sendBogusOpus(sipConnection, stopSignal, invite, rsLocal)
 
 	sigchan := make(chan os.Signal, 1)
@@ -250,14 +263,14 @@ func sendBogusOpus(sipConnection *websocket.Conn, stopSignal chan bool,
 	enc, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
 	if err != nil {
 		hangup(sipConnection, stopSignal, invite)
-		log.Print("failed to create opus encoder: ", err)
+		logAndCaptureError(err, "failed to create opus encoder: ", err)
 	}
 	var pcm []int16 = make([]int16, 960)
 	data := make([]byte, 960)
 	_, err = enc.Encode(pcm, data)
 	if err != nil {
 		hangup(sipConnection, stopSignal, invite)
-		log.Print("failed to encode pcm: ", err)
+		logAndCaptureError(err, "failed to encode pcm: ", err)
 	}
 	timestamp := uint32(0)
 	for {
@@ -275,7 +288,7 @@ func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remote
 	// The RTP session uses the transport to receive and send RTP packets to the remote peer.
 	tpLocal, err := rtp.NewTransportUDP(rtpAddr, localRtpUDPAddr.Port, "")
 	if err != nil {
-		log.Fatal("Couln't setup TransportUDP: ", err)
+		logAndCaptureError(err, "Couln't setup TransportUDP: ", err)
 	}
 
 	rtp.PayloadFormatMap[111] = &rtp.PayloadFormat{111, rtp.Audio, 48000, 1, "OPUS"}
@@ -287,33 +300,33 @@ func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remote
 	)
 	if err.Error() != "" {
 		log.Println(err.Error())
-		log.Fatal("Couln't setup RTP out outstream: ", err)
+		logAndCaptureError(err, "Couln't setup RTP out outstream: ", err)
 	}
 
 	if !rsLocal.SsrcStreamOutForIndex(strLocalIdx).SetPayloadType(111) {
-		log.Fatal("Couldn't set payload type")
+		logAndCaptureError(err, "Couldn't set payload type")
 	}
 	_, err = rsLocal.AddRemote(
 		&rtp.Address{localRtpUDPAddr.IP, localRtpUDPAddr.Port, localRtpUDPAddr.Port + 1, ""},
 	)
 	if err != nil {
-		log.Fatal("Couln't set up RTP remote: ", err)
+		logAndCaptureError(err, "Couln't set up RTP remote: ", err)
 	}
 
 	return
 }
 
 func listenForSipMessages(sipConnection *websocket.Conn, sipChannel chan *sip.Msg,
-	rtpAddr *net.UDPAddr) {
+	rtpAddr *net.UDPAddr, room string, audioPublishChannelName string) {
 	for {
 		sipConnection.SetReadDeadline(time.Time{}) // zero means forever
 		_, rawMessage, err := sipConnection.ReadMessage()
 		if err != nil {
-			log.Fatal("read 200 ok:", err)
+			logAndCaptureError(err, "read 200 ok:", err)
 		}
 		message, err := sip.ParseMsg(rawMessage)
 		if err != nil {
-			log.Fatal("failed to parse sip message: ", err)
+			logAndCaptureError(err, "failed to parse sip message: ", err)
 		}
 		log.Printf("<<<a \n%s\n", string(rawMessage))
 		log.Print("bbb", message.Method)
@@ -338,11 +351,12 @@ func listenForSipMessages(sipConnection *websocket.Conn, sipChannel chan *sip.Ms
 			okMessage.Append(&b)
 			err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 			if err != nil {
-				log.Fatal("send  over websocket: ", err)
+				logAndCaptureError(err, "send  over websocket: ", err)
 			}
 			log.Println(">>> ", b.String())
 		} else if message.Method == "BYE" {
-			os.Exit(0)
+			// os.Exit(0)
+			relay(room, audioPublishChannelName)
 		}
 		sipChannel <- message
 	}
@@ -353,16 +367,16 @@ func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
 	sipConnection.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, rawMessage, err := sipConnection.ReadMessage()
 	if err != nil {
-		log.Fatal("read 200 ok:", err)
+		logAndCaptureError(err, "read 200 ok:", err)
 	}
 	log.Printf("<<< \n%s\n", string(rawMessage))
 	message, err := sip.ParseMsg(rawMessage)
 	if err != nil {
-		log.Fatal("parse 200 ok:", err)
+		logAndCaptureError(err, "parse 200 ok:", err)
 	}
 	if !message.IsResponse() || message.Status != 200 || message.Phrase != "OK" {
 		log.Printf("<<< \n%s\n", string(rawMessage))
-		log.Fatal("wanted 200 ok but got:", message.Status, message.Phrase)
+		logAndCaptureError(err, "wanted 200 ok but got:", message.Status, message.Phrase)
 	}
 	return message
 }
@@ -382,7 +396,7 @@ func ack200Ok(sipConnection *websocket.Conn, invite *sip.Msg, okMessage *sip.Msg
 	ack.Append(&b)
 	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
-		log.Fatal("send ack over websocket: ", err)
+		logAndCaptureError(err, "send ack over websocket: ", err)
 	}
 }
 
@@ -401,7 +415,7 @@ func hangupFullyEstablished(sipConnection *websocket.Conn, stopLocalRecv chan bo
 	bye.Append(&b)
 	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
-		log.Fatal("send BYE over websocket: ", err)
+		logAndCaptureError(err, "send BYE over websocket: ", err)
 	}
 	log.Println("send BYE over websocket")
 	// log.Println(b.String())
@@ -441,7 +455,7 @@ func hangup(sipConnection *websocket.Conn, stopLocalRecv chan bool, invite *sip.
 	bye.Append(&b)
 	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
-		log.Fatal("send BYE over websocket: ", err)
+		logAndCaptureError(err, "send BYE over websocket: ", err)
 	}
 	log.Println("send BYE over websocket")
 	// log.Println(b.String())
@@ -473,16 +487,16 @@ func waitFor100Trying(sipConnection *websocket.Conn) {
 	_, message, err := sipConnection.ReadMessage()
 	// amt, err := conn.Read(memory)
 	if err != nil {
-		log.Fatal("read 100 trying: ", err)
+		logAndCaptureError(err, "read 100 trying: ", err)
 	}
 	log.Printf("<<< %s\n", string(message))
 	msg, err := sip.ParseMsg(message)
 	if err != nil {
-		log.Fatal("parse 100 trying", err)
+		logAndCaptureError(err, "parse 100 trying", err)
 	}
 	if !msg.IsResponse() || msg.Status != 100 || msg.Phrase != "Trying" {
 		log.Printf("<<< %s\n", string(message))
-		log.Fatal("didn't get 100 trying :[")
+		logAndCaptureError(err, "didn't get 100 trying :[")
 	}
 }
 
@@ -492,7 +506,7 @@ func sendSipInvite(invite *sip.Msg, sipConnection *websocket.Conn) {
 	invite.Append(&b)
 	err := sipConnection.WriteMessage(websocket.TextMessage, b.Bytes())
 	if err != nil {
-		log.Fatal("send sip over websocket: ", err)
+		logAndCaptureError(err, "send sip over websocket: ", err)
 	}
 	log.Print("send sip over websocket done")
 	log.Printf(">>>\n%s\n", b.String())
