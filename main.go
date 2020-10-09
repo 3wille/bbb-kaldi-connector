@@ -25,21 +25,21 @@ import (
 )
 
 func main() {
-	redisConnection, pubSubConn := bbb.SetupRedisPubSub()
+	redisConnection, pubSubConn := bbb.SetupRedisPubSub("127.0.0.1")
 	defer redisConnection.Close()
 	for {
 		switch v := pubSubConn.Receive().(type) {
 		case redis.Message:
 			message := bbb.ParseMessage(v)
 			if message.Core.Header.Name == "CreateMeetingReqMsg" {
-				sipExtension = message.Core.Body.Props.VoiceProp.VoiceConf
-				meetingID = message.Core.Body.Props.MeetingProp.ExtID
+				sipExtension := message.Core.Body.Props.VoiceProp.VoiceConf
+				meetingID := message.Core.Body.Props.MeetingProp.ExtID
+				if sipExtension == "" {
+					continue
+				}
+				log.Println(meetingID)
+				go relay(sipExtension, "asr_audio")
 			}
-			if sipExtension == "" {
-				continue
-			}
-			log.Println(meetingID)
-			go relay(sipExtension, "asr_audio")
 		// case redis.Subscription:
 		// 	fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
