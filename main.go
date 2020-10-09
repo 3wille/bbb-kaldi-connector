@@ -17,6 +17,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"gopkg.in/hraban/opus.v2"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/gorilla/websocket"
 	"github.com/jart/gosip/sdp"
 	"github.com/jart/gosip/sip"
@@ -25,6 +26,12 @@ import (
 )
 
 func main() {
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn: os.Args[2],
+	})
+	if err != nil {
+		log.Fatalf("sentry.Init: %s", err)
+	}
 	redisConnection, pubSubConn := bbb.SetupRedisPubSub("127.0.0.1")
 	defer redisConnection.Close()
 	for {
