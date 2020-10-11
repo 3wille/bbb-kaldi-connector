@@ -1,0 +1,14 @@
+[Unit]
+Description=Kaldi Starter
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=bbb
+ExecStart=/usr/bin/env /home/bbb/dev/bbb-kaldi-connector/kaldi-starter
+
+[Install]
+WantedBy=multi-user.target

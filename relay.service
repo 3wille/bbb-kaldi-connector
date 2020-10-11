@@ -1,0 +1,14 @@
+[Unit]
+Description=Relay BBB to Kaldi
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=bbb
+ExecStart=/usr/bin/env /home/bbb/dev/bbb-kaldi-connector/main bbb_secret_path sentry_secret
+
+[Install]
+WantedBy=multi-user.target
