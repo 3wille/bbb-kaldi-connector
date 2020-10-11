@@ -26,6 +26,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	err := sentry.Init(sentry.ClientOptions{
 		Dsn: os.Args[2],
 	})
@@ -68,6 +69,39 @@ func logAndCaptureMessage(message string) {
 	log.Println(message)
 }
 
+func findRTPPort() (rtpUDPAddr *net.UDPAddr) {
+	// Create an RTP socket.
+	firstSocket, err := net.ListenPacket("udp4", "134.100.15.197:0")
+	if err != nil {
+		logAndCaptureError(err, "rtp listen1:", err)
+		return
+	}
+
+	// Get a socket, but just return addr and close socket again
+	firstAddr := firstSocket.LocalAddr().(*net.UDPAddr)
+	log.Print(firstAddr)
+
+	var otherPort int
+	if firstAddr.Port%2 == 1 {
+		otherPort = firstAddr.Port - 1
+	} else {
+		otherPort = firstAddr.Port + 1
+		rtpUDPAddr = firstAddr
+	}
+	otherSocket, err := net.ListenPacket("udp4", fmt.Sprintf("134.100.15.197:%v", otherPort))
+	if err != nil {
+		logAndCaptureError(err, "rtp listen2:", err)
+		rtpUDPAddr = findRTPPort()
+	}
+	if firstAddr.Port%2 == 1 {
+		rtpUDPAddr = otherSocket.LocalAddr().(*net.UDPAddr)
+	}
+	firstSocket.Close()
+	otherSocket.Close()
+	// defer rtpsock.Close()
+	return
+}
+
 func relay(room string, audioPublishChannelName string) {
 	host := "ltbbb1.informatik.uni-hamburg.de"
 	secretToken := os.Args[1]
@@ -80,16 +114,12 @@ func relay(room string, audioPublishChannelName string) {
 	stopSignal := make(chan bool, 1)
 	startRelay := make(chan bool, 1)
 
-	// Create an RTP socket.
-	rtpsock, err := net.ListenPacket("udp4", "134.100.15.197:4002")
 	rtpAddr, _ := net.ResolveIPAddr("ip", "134.100.15.197")
+	rtpUDPAddr := findRTPPort()
 	if err != nil {
 		logAndCaptureError(err, "rtp listen:", err)
 		return
 	}
-	// defer rtpsock.Close()
-	rtpUDPAddr := rtpsock.LocalAddr().(*net.UDPAddr)
-	log.Print(rtpUDPAddr)
 
 	// Create an invite message and attach the SDP.
 	invite := buildSipInvite(room, host, rtpUDPAddr)
@@ -108,7 +138,7 @@ func relay(room string, audioPublishChannelName string) {
 	}
 	log.Print(remoteRTPAddr)
 
-	rsLocal, err := prepareRTPSession(rtpAddr, rtpUDPAddr, remoteRTPAddr)
+	rsLocal, err := prepareRTPSession(rtpAddr, rtpUDPAddr.Port, remoteRTPAddr)
 	if err != nil {
 		hangup(sipConnection, stopSignal, invite)
 		logAndCaptureError(err, "Couldn't create remote: ", err)
@@ -181,10 +211,6 @@ func relay(room string, audioPublishChannelName string) {
 				if err != nil {
 					logAndCaptureError(err, "Couldn't decode frame")
 				}
-				cnt++
-				if cnt%100 == 0 {
-					log.Println("Relayed packages: ", cnt)
-				}
 				pcmBytes := make([]byte, 0, frameSize*2)
 				for _, pcmSample := range pcm[:sampleCount] {
 					pcmSampleBytes := make([]byte, 2)
@@ -194,7 +220,11 @@ func relay(room string, audioPublishChannelName string) {
 				// log.Println("publishing audio: ", pcmBytes)
 				receivedBy, err := redis.Int(redisConnection.Do(
 					"PUBLISH", audioPublishChannelName, pcmBytes[:sampleCount*2]))
-				_ = receivedBy
+				cnt++
+				if cnt%100 == 0 {
+					log.Println("Relayed packages: ", cnt)
+					log.Println("Received by: ", receivedBy)
+				}
 				if err != nil {
 					logAndCaptureError(err, "Couldn't publish audio:", err)
 				}
@@ -225,7 +255,6 @@ func relay(room string, audioPublishChannelName string) {
 			}
 		}
 	}()
-	rtpsock.Close()
 	err = rsLocal.StartSession()
 	if err != nil {
 		log.Fatal("Couldn't start session: ", err)
@@ -283,10 +312,10 @@ func sendBogusOpus(sipConnection *websocket.Conn, stopSignal chan bool,
 	}
 }
 
-func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remoteRTPUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
+func prepareRTPSession(rtpAddr *net.IPAddr, localRTPPort int, remoteRTPUDPAddr *net.UDPAddr) (rsLocal *rtp.Session, err error) {
 	// Create a UDP transport with "local" address and use this for a "local" RTP session
 	// The RTP session uses the transport to receive and send RTP packets to the remote peer.
-	tpLocal, err := rtp.NewTransportUDP(rtpAddr, localRtpUDPAddr.Port, "")
+	tpLocal, err := rtp.NewTransportUDP(rtpAddr, localRTPPort, "")
 	if err != nil {
 		logAndCaptureError(err, "Couln't setup TransportUDP: ", err)
 	}
@@ -296,7 +325,7 @@ func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remote
 	// use it as write and read modules for the Session.
 	rsLocal = rtp.NewSession(tpLocal, tpLocal)
 	strLocalIdx, err := rsLocal.NewSsrcStreamOut(
-		&rtp.Address{rtpAddr.IP, localRtpUDPAddr.Port, localRtpUDPAddr.Port + 1, ""}, 0, 0,
+		&rtp.Address{rtpAddr.IP, localRTPPort, localRTPPort + 1, ""}, 0, 0,
 	)
 	if err.Error() != "" {
 		log.Println(err.Error())
@@ -307,7 +336,7 @@ func prepareRTPSession(rtpAddr *net.IPAddr, localRtpUDPAddr *net.UDPAddr, remote
 		logAndCaptureError(err, "Couldn't set payload type")
 	}
 	_, err = rsLocal.AddRemote(
-		&rtp.Address{localRtpUDPAddr.IP, localRtpUDPAddr.Port, localRtpUDPAddr.Port + 1, ""},
+		&rtp.Address{rtpAddr.IP, localRTPPort, localRTPPort + 1, ""},
 	)
 	if err != nil {
 		logAndCaptureError(err, "Couln't set up RTP remote: ", err)
@@ -355,11 +384,25 @@ func listenForSipMessages(sipConnection *websocket.Conn, sipChannel chan *sip.Ms
 			}
 			log.Println(">>> ", b.String())
 		} else if message.Method == "BYE" {
-			// os.Exit(0)
-			relay(room, audioPublishChannelName)
+			// Reason: Q.850;cause=16;text="NORMAL_CLEARING"
+			if message.XHeader == nil || !messageIsNormalClearing(message.XHeader) {
+				relay(room, audioPublishChannelName)
+			}
 		}
 		sipChannel <- message
 	}
+}
+
+func messageIsNormalClearing(header *sip.XHeader) bool {
+	if header != nil {
+		if header.Name == "Reason" && string(header.Value) == "Q.850;cause=16;text=\"NORMAL_CLEARING\"" {
+			return true
+		}
+		if header.Next != nil {
+			return messageIsNormalClearing(header.Next)
+		}
+	}
+	return false
 }
 
 func waitFor200Ok(sipConnection *websocket.Conn) *sip.Msg {
