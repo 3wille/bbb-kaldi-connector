@@ -41,12 +41,12 @@ func main() {
 			message := bbb.ParseMessage(v)
 			if message.Core.Header.Name == "CreateMeetingReqMsg" {
 				sipExtension := message.Core.Body.Props.VoiceProp.VoiceConf
-				meetingID := message.Core.Body.Props.MeetingProp.ExtID
+				meetingID := message.Core.Body.Props.MeetingProp.IntID
 				if sipExtension == "" {
 					continue
 				}
 				log.Println(meetingID)
-				go relay(sipExtension, "asr_audio")
+				go relay(sipExtension, "asr_audio_"+string(meetingID))
 			} else if message.Core.Header.Name == "DestroyMeetingSysCmdMsg" {
 				meetingID := message.Core.Body.MeetingID
 				_ = meetingID
@@ -103,6 +103,7 @@ func findRTPPort() (rtpUDPAddr *net.UDPAddr) {
 }
 
 func relay(room string, audioPublishChannelName string) {
+	log.Println(audioPublishChannelName)
 	host := "ltbbb1.informatik.uni-hamburg.de"
 	secretToken := os.Args[1]
 	sipURL := url.URL{Scheme: "wss", Host: host, Path: fmt.Sprintf("ws_%v", secretToken)}
