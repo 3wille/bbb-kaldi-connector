@@ -9,5 +9,6 @@ require (
 	github.com/gorilla/websocket v1.4.2
 	github.com/jart/gosip v0.0.0-20200629215808-4e7924e19438
 	github.com/thanhpk/randstr v1.0.4
+	go.mongodb.org/mongo-driver v1.4.2 // indirect
 	gopkg.in/hraban/opus.v2 v2.0.0-20200710132758-e28f8214483b
 )
