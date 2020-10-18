@@ -51,7 +51,7 @@ func main() {
 
 func processMessage(message redis.Message) {
 	messageData := parseMessage(message)
-	if messageData.Handle == "completeUtterance" {
+	if messageData.Handle == "partialUtterance" {
 		channelRegex := regexp.MustCompile(`asr_text_(\w*-\w*)`)
 		channel := message.Channel
 		matches := channelRegex.FindStringSubmatch(channel)
@@ -62,21 +62,35 @@ func processMessage(message redis.Message) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+		client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://127.0.1.1:27017"))
 		defer func() {
 			if err = client.Disconnect(ctx); err != nil {
 				panic(err)
 			}
 		}()
 		err = client.Ping(ctx, readpref.Primary())
+		if err != nil {
+			log.Print(err)
+			return
+		}
 
 		collection := client.Database("meteor").Collection("captions")
-		filter := bson.M{"meetingId": meetingID}
-		result := collection.FindOneAndUpdate(ctx, filter, bson.M{"data": messageData.Utterance})
-		if result.Err() != nil {
-			log.Print(result.Err())
+		filter := bson.M{"meetingId": meetingID, "locale.locale": "en"}
+		rawResult, err := collection.UpdateOne(
+			ctx, filter,
+			bson.M{
+				"$set": bson.M{
+					"data": messageData.Utterance, "ownerId": "asr",
+				},
+				"$inc": bson.M{"revs": 1},
+			},
+		)
+		// rawResult, err := collection.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"data": "test"}, "$inc": bson.M{"revs": 1}})
+		if err != nil {
+			log.Print(err)
+			return
 		}
-		log.Print(result)
+		log.Print(rawResult)
 	}
 }
 

@@ -36,7 +36,7 @@ func startKaldiForMeeting(kaldiProcessMap map[string]chan bool, meetingID string
 	cmd := exec.Command(
 		"/home/3wille/pykaldi_env/bin/python3", "nnet3_model.py", "-m0", "-e", "-c1", "-t",
 		"-asinc_fastest", "-r 48000", "-ykaldi_tuda_de_nnet3_chain2.yaml",
-		"--redis-audio=asr_audio_"+string(meetingID), "--redis-channel=asr_"+string(meetingID),
+		"--redis-audio=asr_audio_"+string(meetingID), "--redis-channel=asr_text_"+string(meetingID),
 	)
 	log.Println(cmd.Args)
 	cmd.Env = append(cmd.Env, "LD_PRELOAD=/opt/intel/mkl/lib/intel64/libmkl_def.so:/opt/intel/mkl/lib/intel64/libmkl_avx2.so:/opt/intel/mkl/lib/intel64/libmkl_core.so:/opt/intel/mkl/lib/intel64/libmkl_intel_lp64.so:/opt/intel/mkl/lib/intel64/libmkl_intel_thread.so:/opt/intel/lib/intel64_lin/libiomp5.so")
@@ -52,7 +52,12 @@ func startKaldiForMeeting(kaldiProcessMap map[string]chan bool, meetingID string
 	go func(stopChannel chan bool, cmd exec.Cmd, stderr io.ReadCloser) {
 		ch := make(chan error)
 		go func() {
-			ch <- cmd.Wait()
+			slurp, _ := ioutil.ReadAll(stderr)
+			fmt.Printf("%s\n", slurp)
+			if err := cmd.Wait(); err != nil {
+				log.Println("Kaldi exited, restarting: ", meetingID)
+				startKaldiForMeeting(kaldiProcessMap, meetingID)
+			}
 		}()
 		for {
 			select {
