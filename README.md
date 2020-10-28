@@ -97,3 +97,36 @@ kaldi-starter
 To work, the starter of course needs a running version of [Kaldi Model Server](https://github.com/uhh-lt/kaldi-model-server).
 That in turn, needs a running version of PyKaldi and Kaldi, please see the respective documentations on how to install those.
 KMS also needs a model to work with, the respective settings yaml file can be set in https://github.com/3wille/bbb-kaldi-connector/blob/master/kaldi-starter.go#L38
+
+## Results
+
+When everything is working fine, you should be able to see Redis PubSub channels of this pattern ``asr_text_INTERNAL_MEETING_ID`` and on each of those channels messages with partial and complete utterances:
+
+```
+{
+    "handle": "partialUtterance",
+    "utterance": "die Universität Hamburg ist mit über vierzig Tausend Studierenden die größte
+	Universität in der Freien und Hansestadt Hamburg die größte Forschungs und Ausbildungseinrichtung
+in Norddeutschland und eine der zehn größten Hochschulen in",
+    "key": "mic0-utt329-part52",
+    "speaker": "speaker0",
+    "time": 1751.2375078201294
+}
+```
+```
+{
+    "handle": "completeUtterance",
+    "utterance": "die Universität Hamburg ist mit über vierzig Tausend Studierenden die größte Universität in der Freien und Hansestadt Hamburg die größte Forschungs und Ausbildungseinrichtung in Norddeutschland und eine der zehn größten Hochschulen in Deutschland",
+    "confidences": [0.9995377659797668, 1.0, 0.867841362953186, 0.8684811592102051, 0.9593820571899414, 1.0, 1.0, 0.9992160797119141, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9999002814292908, 1.0, 0.9989173412322998, 1.0, 1.0, 1.0, 0.997087836265564, 0.9883859157562256, 1.0, 1.0, 0.9992555379867554, 1.0, 1.0, 0.973842442035675, 0.9845209121704102, 1.0, 1.0, 1.0, 1.0, 0.9999350905418396, 1.0],
+    "key": "mic0-utt443-part67",
+    "speaker": "speaker0",
+    "time": 2371.5270574092865
+}
+```
+(text source: https://de.wikipedia.org/wiki/Universit%C3%A4t_Hamburg)
+
+If you don't see this message, you can check on ``asr_audio_INTERNAL_MEETING_ID`` to see whether the problem is with the relay or kaldi.
+
+When the MongoDB Connector is running, you should be able to see the CC button in the bottom-left corner of the client's main pane.
+Once activated, the closed captions should show like
+![MongoDB Connector](./docs/captions.png)
