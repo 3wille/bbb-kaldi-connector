@@ -26,17 +26,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("sentry.Init: %s", err)
 	}
+	listen()
+}
 
+func listen() {
 	host := "127.0.0.1"
 	log.Println("Setting up redis connection")
 	redisConnection := bbb.NewRedisConnection(host)
 	channels := []string{"asr_text_*"}
 	pubSubConn := redis.PubSubConn{Conn: redisConnection}
-	err = pubSubConn.PSubscribe(redis.Args{}.AddFlat(channels)...)
+	err := pubSubConn.PSubscribe(redis.Args{}.AddFlat(channels)...)
 	if err != nil {
 		log.Fatal("Couldn't subscribe to BBB channels: ", err)
 	}
 	log.Print("Subscribed to channels")
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Recovered in f", r)
+			listen()
+		}
+	}()
 	for {
 		switch message := pubSubConn.Receive().(type) {
 		case redis.Message:
@@ -44,7 +53,8 @@ func main() {
 		case redis.Subscription:
 			log.Printf("%s: %s %d\n", message.Channel, message.Kind, message.Count)
 		case error:
-			log.Fatal(message)
+			log.Print("redis message error: ", message)
+			listen()
 		}
 	}
 }

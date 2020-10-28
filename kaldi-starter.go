@@ -13,6 +13,16 @@ import (
 )
 
 func main() {
+	listen()
+}
+
+func listen() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Recovered in f", r)
+			listen()
+		}
+	}()
 	host := "134.100.15.197"
 	pubSubConnection, pubSub := bbb.SetupRedisPubSub(host)
 	defer pubSubConnection.Close()
@@ -33,13 +43,23 @@ func main() {
 }
 
 func startKaldiForMeeting(kaldiProcessMap map[string]chan bool, meetingID string) {
+	defer func(kaldiProcessMap map[string]chan bool, meetingID string) {
+		if r := recover(); r != nil {
+			log.Println("Recovered in f, restarting", r)
+			startKaldiForMeeting(kaldiProcessMap, meetingID)
+		}
+	}(kaldiProcessMap, meetingID)
 	cmd := exec.Command(
 		"/home/3wille/pykaldi_env/bin/python3", "nnet3_model.py", "-m0", "-e", "-c1", "-t",
-		"-asinc_fastest", "-r 48000", "-ykaldi_tuda_de_nnet3_chain2.yaml",
+		"-asinc_fastest", "-r 48000", "-ylibrispeech.yaml",
 		"--redis-audio=asr_audio_"+string(meetingID), "--redis-channel=asr_text_"+string(meetingID),
+		// "/home/3wille/pykaldi_env/bin/python3", "nnet3_model.py", "-m0", "-e", "-c1", "-t",
+		// "-asinc_fastest", "-r 48000", "-ykaldi_tuda_de_nnet3_chain2_new.yaml",
+		// "--redis-audio=asr_audio_"+string(meetingID), "--redis-channel=asr_text_"+string(meetingID),
 	)
 	log.Println(cmd.Args)
 	cmd.Env = append(cmd.Env, "LD_PRELOAD=/opt/intel/mkl/lib/intel64/libmkl_def.so:/opt/intel/mkl/lib/intel64/libmkl_avx2.so:/opt/intel/mkl/lib/intel64/libmkl_core.so:/opt/intel/mkl/lib/intel64/libmkl_intel_lp64.so:/opt/intel/mkl/lib/intel64/libmkl_intel_thread.so:/opt/intel/lib/intel64_lin/libiomp5.so")
+	cmd.Env = append(cmd.Env, "OMP_NUM_THREADS=1")
 	cmd.Dir = "/home/3wille/kaldi-model-server"
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

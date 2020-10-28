@@ -33,6 +33,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("sentry.Init: %s", err)
 	}
+	relayListen()
+}
+
+func relayListen() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Recovered in f", r)
+			relayListen()
+		}
+	}()
 	redisConnection, pubSubConn := bbb.SetupRedisPubSub("127.0.0.1")
 	defer redisConnection.Close()
 	for {
@@ -348,6 +358,13 @@ func prepareRTPSession(rtpAddr *net.IPAddr, localRTPPort int, remoteRTPUDPAddr *
 
 func listenForSipMessages(sipConnection *websocket.Conn, sipChannel chan *sip.Msg,
 	rtpAddr *net.UDPAddr, room string, audioPublishChannelName string) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Recovered in f, restarting", r)
+			listenForSipMessages(sipConnection, sipChannel, rtpAddr, room, audioPublishChannelName)
+		}
+	}()
 	for {
 		sipConnection.SetReadDeadline(time.Time{}) // zero means forever
 		_, rawMessage, err := sipConnection.ReadMessage()
