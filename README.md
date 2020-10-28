@@ -1,12 +1,11 @@
 # bbb-kaldi-connector
 
 This repository is the result of my master programm project at the [LT Group](https://github.com/uhh-lt) at the Univeristy of Hamburg.
-
-
-This project relays audio from freeswitch to a [Kaldi-Model-Server](https://github.com/uhh-lt/kaldi-model-server) over redis. Audio is received over RTP as OPUS, decoded and send on as PCM 16bit.
+The main goal of this project was to integrate a speech recognition pipeline into the [BigBlueButton Conference System](https://github.com/bigbluebutton/bigbluebutton).
+It further allows to display recognized speech as closed captions in BBB's HTML5 client.
 
 ## Usage 
 
 ```
-go run bbb_secret_path_token sentry_token
+go run audio_relay.go bbb_secret_path_token sentry_url
 ```
